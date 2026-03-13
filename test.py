@@ -331,15 +331,26 @@ with tab3:
     else:
         st.info("No grades submitted yet.")
 
-# --- TAB 4: Final Leaderboard ---
+# --- TAB 4: Final Leaderboard (UPDATED AS REQUESTED) ---
 with tab4:
     st.header("🏆 Final Aggregated Leaderboard")
     if not all_scores_df.empty and not teams_df.empty:
         df_calc = all_scores_df.copy()
-        df_calc['Judge Total'] = df_calc['criteria_json'].apply(lambda x: sum(json.loads(x).values())) + df_calc['field_rank'].apply(calculate_field_points)
         
+        # Calculate individual judge's total score
+        df_calc['Individual Score'] = df_calc['criteria_json'].apply(lambda x: sum(json.loads(x).values())) + df_calc['field_rank'].apply(calculate_field_points)
+        
+        # Determine if any judge marked them ineligible
         ineligible_flags = df_calc.groupby(['team_number', 'award'])['is_eligible'].min().reset_index()
-        final_totals = df_calc.groupby(['team_number', 'award'])['Judge Total'].sum().reset_index()
+        
+        # ADD ALL SCORES: Sum the scores from every judge into the Final Total Score
+        final_totals = df_calc.groupby(['team_number', 'award'])['Individual Score'].sum().reset_index().rename(columns={'Individual Score': 'Final Total Score'})
+        
+        # Count how many judges submitted scores for this team to easily verify who was seen
+        judge_counts = df_calc.groupby(['team_number', 'award'])['username'].count().reset_index().rename(columns={'username': 'Judges Count'})
+        
+        # Merge it all together
+        final_totals = final_totals.merge(judge_counts, on=['team_number', 'award'])
         final_totals = final_totals.merge(ineligible_flags, on=['team_number', 'award']).merge(teams_df, on='team_number', how='left')
         
         eligible_teams = final_totals[final_totals['is_eligible'] == 1]
@@ -356,12 +367,12 @@ with tab4:
                     colA, colB = st.columns(2)
                     with colA:
                         st.subheader("📐 Design Award")
-                        design_df = div_teams[div_teams['award'] == 'Design Award'].sort_values(by='Judge Total', ascending=False)
-                        st.dataframe(design_df[['team_number', 'team_name', 'Judge Total']], hide_index=True, use_container_width=True)
+                        design_df = div_teams[div_teams['award'] == 'Design Award'].sort_values(by='Final Total Score', ascending=False)
+                        st.dataframe(design_df[['team_number', 'team_name', 'Judges Count', 'Final Total Score']], hide_index=True, use_container_width=True)
                     with colB:
                         st.subheader("💡 Innovate Award")
-                        innovate_df = div_teams[div_teams['award'] == 'Innovate Award'].sort_values(by='Judge Total', ascending=False)
-                        st.dataframe(innovate_df[['team_number', 'team_name', 'Judge Total']], hide_index=True, use_container_width=True)
+                        innovate_df = div_teams[div_teams['award'] == 'Innovate Award'].sort_values(by='Final Total Score', ascending=False)
+                        st.dataframe(innovate_df[['team_number', 'team_name', 'Judges Count', 'Final Total Score']], hide_index=True, use_container_width=True)
     else:
         st.info("No judging data yet.")
 
@@ -431,7 +442,7 @@ with tab5:
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     if 'final_totals' in locals():
-                        summary_df = final_totals.rename(columns={'Judge Total': 'Combined Score', 'is_eligible': 'Eligibility (1=Yes, 0=No)'})
+                        summary_df = final_totals.rename(columns={'Final Total Score': 'Combined Score', 'is_eligible': 'Eligibility (1=Yes, 0=No)'})
                         summary_df.to_excel(writer, sheet_name="Final Leaderboards", index=False)
                     
                     unique_judges = df_export['username'].unique()
