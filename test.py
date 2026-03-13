@@ -152,7 +152,10 @@ with col2:
         st.session_state.update({'logged_in': False, 'username': ''})
         st.rerun()
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📋 Teams", "⚖️ Judging", "👀 View All Grades", "🏆 Leaderboards", "⚙️ Admin & Export", "🌐 Live Match Data", "⏱️ Time Keeper"])
+tab1, tab_map, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "📋 Teams", "🗺️ Pit Map & Status", "⚖️ Judging", "👀 View All Grades", 
+    "🏆 Leaderboards", "⚙️ Admin & Export", "🌐 Live Match Data", "⏱️ Time Keeper"
+])
 
 conn = get_db_connection()
 try:
@@ -184,6 +187,52 @@ with tab1:
                 st.error("Team number already exists.")
     
     st.dataframe(teams_df, use_container_width=True, hide_index=True)
+
+# --- NEW TAB: Pit Map & Status Board ---
+with tab_map:
+    st.header("🗺️ Pit Map & Live Status")
+    
+    # 1. Display the Map
+    if os.path.exists("download.png"):
+        st.image("download.png", use_container_width=True)
+    else:
+        st.warning("⚠️ 'download.png' not found! Please make sure the image file is saved in the exact same folder as your app.py file.")
+    
+    st.markdown("---")
+    
+    # 2. Live Status Board Logic
+    st.subheader("📡 Live Interview Status Board")
+    
+    if teams_df.empty:
+        st.info("No teams added yet. Add teams to see their interview status.")
+    else:
+        # Pull distinct teams that have been graded
+        try:
+            graded_df = pd.read_sql_query("SELECT DISTINCT team_number FROM scores", conn)
+            graded_teams = set(graded_df['team_number'].astype(str))
+        except pd.errors.DatabaseError:
+            graded_teams = set()
+
+        # Create the status column
+        status_df = teams_df.copy()
+        status_df['Status'] = status_df['team_number'].astype(str).apply(
+            lambda x: "🟢 Seen" if x in graded_teams else "🔴 Unseen"
+        )
+        
+        # Filter options so judges can quickly see who they missed
+        status_filter = st.radio("Filter Status:", ["All Teams", "🔴 Unseen Only", "🟢 Seen Only"], horizontal=True)
+        
+        if status_filter == "🔴 Unseen Only":
+            display_df = status_df[status_df['Status'] == "🔴 Unseen"]
+        elif status_filter == "🟢 Seen Only":
+            display_df = status_df[status_df['Status'] == "🟢 Seen"]
+        else:
+            display_df = status_df
+
+        # Rearrange columns to look nice
+        display_df = display_df[['Status', 'team_number', 'team_name', 'division']]
+        
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 # --- TAB 2: Judging ---
 with tab2:
@@ -223,7 +272,6 @@ with tab2:
                 st.markdown("### 🔴 Required Criteria")
                 new_scores, req_checks = {}, {}
                 
-                # CHANGED: Swapped st.slider for st.number_input
                 for req in req_criteria:
                     prev_checked = current_scores.get(req, 0.0) > 0 or existing_data is None
                     req_checks[req] = st.checkbox(req, value=prev_checked)
@@ -233,7 +281,6 @@ with tab2:
                         new_scores[req] = 0.0
 
                 st.markdown("### 🟢 Encouraged Criteria")
-                # CHANGED: Swapped st.slider for st.number_input
                 for enc in enc_criteria:
                     new_scores[enc] = st.number_input(f"{enc} (0-10)", min_value=0.0, max_value=10.0, step=0.5, value=float(current_scores.get(enc, 0.0)))
                 
