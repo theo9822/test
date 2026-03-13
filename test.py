@@ -7,7 +7,6 @@ import io
 import os
 from datetime import datetime
 import streamlit.components.v1 as components
-from PIL import Image
 
 # --- Configuration & Setup ---
 st.set_page_config(page_title="FTC Multi-Judge App", page_icon="🤖", layout="wide")
@@ -153,8 +152,7 @@ with col2:
         st.session_state.update({'logged_in': False, 'username': ''})
         st.rerun()
 
-# ADDED TAB 7 for Pit Map
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📋 Teams", "⚖️ Judging", "👀 View All Grades", "🏆 Leaderboards", "⚙️ Admin & Export", "🌐 Live Match Data", "🗺️ Pit Map & Status"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📋 Teams", "⚖️ Judging", "👀 View All Grades", "🏆 Leaderboards", "⚙️ Admin & Export", "🌐 Live Match Data", "⏱️ Time Keeper"])
 
 conn = get_db_connection()
 try:
@@ -225,17 +223,19 @@ with tab2:
                 st.markdown("### 🔴 Required Criteria")
                 new_scores, req_checks = {}, {}
                 
+                # CHANGED: Swapped st.slider for st.number_input
                 for req in req_criteria:
                     prev_checked = current_scores.get(req, 0.0) > 0 or existing_data is None
                     req_checks[req] = st.checkbox(req, value=prev_checked)
                     if req_checks[req]:
-                        new_scores[req] = st.slider(f"{req}", min_value=0.0, max_value=10.0, step=0.1, value=float(current_scores.get(req, 0.0)))
+                        new_scores[req] = st.number_input(f"{req} (0-10)", min_value=0.0, max_value=10.0, step=0.5, value=float(current_scores.get(req, 0.0)))
                     else:
                         new_scores[req] = 0.0
 
                 st.markdown("### 🟢 Encouraged Criteria")
+                # CHANGED: Swapped st.slider for st.number_input
                 for enc in enc_criteria:
-                    new_scores[enc] = st.slider(enc, min_value=0.0, max_value=10.0, step=0.1, value=float(current_scores.get(enc, 0.0)))
+                    new_scores[enc] = st.number_input(f"{enc} (0-10)", min_value=0.0, max_value=10.0, step=0.5, value=float(current_scores.get(enc, 0.0)))
                 
                 st.markdown("---")
                 col_f1, col_f2 = st.columns([1, 2])
@@ -475,52 +475,130 @@ with tab6:
         
     st.caption(f"If the embedded page doesn't load, you can [click here to open the official FIRST page]({selected_url}) in a new tab.")
 
-# --- TAB 7: Pit Map & Live Status ---
+# --- TAB 7: TIME KEEPER ---
 with tab7:
-    st.header("🗺️ Pit Map & Judging Status")
+    st.header("⏱️ Judging Time Keeper")
+    st.write("Use this timer to keep pit interviews running on schedule. A loud alarm will sound when time is up!")
     
-    # 1. Show the layout image
-    try:
-        image = Image.open('download.png')
-        st.image(image, caption="Event Pit Map Layout", use_container_width=True)
-    except FileNotFoundError:
-        st.warning("⚠️ Could not find 'download.png'. Please make sure the image is saved in the exact same folder as your app code.")
+    # Custom HTML/JS with ONINPUT triggers and 5 loud beeps
+    timer_html = """
+    <div style="font-family: Arial, sans-serif; text-align: center; padding: 30px; background: #262730; border-radius: 15px; border: 2px solid #FF4B4B; color: white;">
+        <h1 style="font-size: 5rem; margin: 10px; font-variant-numeric: tabular-nums;" id="display">05:00</h1>
+        
+        <div style="margin: 20px 0;">
+            <label style="font-size: 1.2rem; margin-right: 10px;">
+                <input type="number" id="mins" value="5" min="0" oninput="updateFromInputs()" style="width: 70px; font-size: 1.2rem; padding: 5px; text-align: center; border-radius: 5px; border: none; color: black;"> Minutes
+            </label>
+            <label style="font-size: 1.2rem;">
+                <input type="number" id="secs" value="0" min="0" max="59" oninput="updateFromInputs()" style="width: 70px; font-size: 1.2rem; padding: 5px; text-align: center; border-radius: 5px; border: none; color: black;"> Seconds
+            </label>
+        </div>
+        
+        <div style="margin-top: 25px;">
+            <button onclick="startTimer()" style="font-size: 1.5rem; font-weight: bold; padding: 10px 25px; margin: 5px; cursor: pointer; border-radius: 8px; background: #4CAF50; color: white; border: none; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">▶ Start</button>
+            <button onclick="pauseTimer()" style="font-size: 1.5rem; font-weight: bold; padding: 10px 25px; margin: 5px; cursor: pointer; border-radius: 8px; background: #FF9800; color: white; border: none; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">⏸ Pause</button>
+            <button onclick="resetTimer()" style="font-size: 1.5rem; font-weight: bold; padding: 10px 25px; margin: 5px; cursor: pointer; border-radius: 8px; background: #F44336; color: white; border: none; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">🔄 Reset</button>
+        </div>
+    </div>
 
-    st.markdown("---")
+    <script>
+    let timerInterval;
+    let timeRemaining = 300; 
+    let isRunning = false;
     
-    # 2. Show the Live Status Board
-    st.subheader("📋 Team Judging Status")
-    st.write("A team is marked as **🟢 Seen** if at least one judge has submitted a score for them. Otherwise, they remain **🔴 Unseen**.")
+    function playBeep() {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AudioContext();
+        
+        // Loop to create 5 distinct, annoying beeps
+        for (let i = 0; i < 5; i++) {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            
+            // "Square" wave is much harsher and louder than a smooth "sine" wave
+            osc.type = "square"; 
+            osc.frequency.value = 1000; // High pitch to cut through pit noise
+            
+            // Schedule the beep: starts at current time + spacing (0.4 seconds apart)
+            let startTime = ctx.currentTime + (i * 0.4);
+            let stopTime = startTime + 0.2; // Each beep lasts 0.2 seconds
+            
+            // Fast attack and release so it sounds sharp
+            gain.gain.setValueAtTime(0, startTime);
+            gain.gain.linearRampToValueAtTime(1, startTime + 0.01);
+            gain.gain.setValueAtTime(1, stopTime - 0.01);
+            gain.gain.linearRampToValueAtTime(0, stopTime);
+            
+            osc.start(startTime);
+            osc.stop(stopTime);
+        }
+    }
+
+    function updateDisplay() {
+        let m = Math.floor(timeRemaining / 60);
+        let s = timeRemaining % 60;
+        document.getElementById("display").innerText = 
+            (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
+    }
+
+    function updateFromInputs() {
+        if (!isRunning) {
+            let m = parseInt(document.getElementById("mins").value) || 0;
+            let s = parseInt(document.getElementById("secs").value) || 0;
+            timeRemaining = m * 60 + s;
+            document.getElementById("display").style.color = "white";
+            updateDisplay();
+        }
+    }
+
+    function startTimer() {
+        if (isRunning) return;
+        
+        if (timeRemaining <= 0) {
+            updateFromInputs();
+        }
+
+        if (timeRemaining > 0) {
+            isRunning = true;
+            document.getElementById("display").style.color = "white";
+            timerInterval = setInterval(() => {
+                timeRemaining--;
+                updateDisplay();
+                if (timeRemaining <= 0) {
+                    clearInterval(timerInterval);
+                    isRunning = false;
+                    playBeep(); // Fires off the 5 annoying beeps
+                    
+                    // Flash the screen red matching the duration of the beeps
+                    document.getElementById("display").style.color = "#FF0000";
+                    setTimeout(() => document.getElementById("display").style.color = "white", 400);
+                    setTimeout(() => document.getElementById("display").style.color = "#FF0000", 800);
+                    setTimeout(() => document.getElementById("display").style.color = "white", 1200);
+                    setTimeout(() => document.getElementById("display").style.color = "#FF0000", 1600);
+                    setTimeout(() => document.getElementById("display").style.color = "white", 2000);
+                }
+            }, 1000);
+        }
+    }
+
+    function pauseTimer() {
+        clearInterval(timerInterval);
+        isRunning = false;
+    }
+
+    function resetTimer() {
+        pauseTimer();
+        updateFromInputs();
+    }
     
-    status_query = """
-    SELECT 
-        t.team_number AS "Team Number", 
-        t.team_name AS "Team Name", 
-        t.division AS "Division",
-        CASE WHEN s.team_number IS NOT NULL THEN '🟢 Seen' ELSE '🔴 Unseen' END AS "Status"
-    FROM teams t
-    LEFT JOIN (SELECT DISTINCT team_number FROM scores) s ON t.team_number = s.team_number
-    ORDER BY t.team_number ASC
+    updateFromInputs();
+    </script>
     """
     
-    try:
-        status_df = pd.read_sql_query(status_query, conn)
-        
-        if status_df.empty:
-            st.info("No teams have been added yet. Add teams in the 'Teams' or 'Admin' tab to populate this board.")
-        else:
-            # Add a quick filter so you don't have to scroll through 80+ teams
-            view_filter = st.radio("Filter Status Board:", ["All Teams", "🔴 Unseen Only", "🟢 Seen Only"], horizontal=True)
-            
-            if view_filter == "🔴 Unseen Only":
-                status_df = status_df[status_df["Status"] == '🔴 Unseen']
-            elif view_filter == "🟢 Seen Only":
-                status_df = status_df[status_df["Status"] == '🟢 Seen']
-                
-            st.dataframe(status_df, use_container_width=True, hide_index=True)
-            
-    except pd.errors.DatabaseError:
-        st.info("Database error loading team status. Ensure teams are imported first.")
+    components.html(timer_html, height=450)
 
 try:
     conn.close()
